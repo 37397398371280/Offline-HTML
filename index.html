@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Offline HTML Runner</title>
 <style>
@@ -191,7 +192,7 @@
     padding: 20px 0;
   }
 
-  /* Fullscreen Runner View (Hides Everything Else) */
+  /* Fullscreen Runner View */
   #runner-container {
     display: none;
     position: fixed;
@@ -207,25 +208,6 @@
     height: 100%;
     border: none;
     display: block;
-  }
-  /* Floating back button to return to home page */
-  .back-menu-btn {
-    position: fixed;
-    top: 10px;
-    left: 10px;
-    background: rgba(0, 0, 0, 0.7);
-    color: #fff;
-    border: 1px solid #555;
-    border-radius: 6px;
-    padding: 6px 12px;
-    font-size: 13px;
-    cursor: pointer;
-    z-index: 10000;
-    opacity: 0.3;
-    transition: opacity 0.2s;
-  }
-  .back-menu-btn:hover, .back-menu-btn:active {
-    opacity: 1;
   }
 </style>
 </head>
@@ -264,13 +246,12 @@
 
   <!-- Fullscreen Output Container -->
   <div id="runner-container">
-    <button type="button" class="back-menu-btn" id="back-btn">⬅ Menu</button>
     <iframe id="runner-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"></iframe>
   </div>
 
 <script>
 (function() {
-  var DB_NAME = "OfflineHtmlRunnerRawDB_v3";
+  var DB_NAME = "OfflineHtmlRunnerRawDB_v4";
   var DB_VERSION = 1;
   var STORE_NAME = "files";
 
@@ -279,7 +260,6 @@
   var launcherEl = document.getElementById("launcher");
   var runnerContainer = document.getElementById("runner-container");
   var runnerFrame = document.getElementById("runner-frame");
-  var backBtn = document.getElementById("back-btn");
   var urlInput = document.getElementById("url-input");
   var loadUrlBtn = document.getElementById("load-url-btn");
   var fileInput = document.getElementById("file-input");
@@ -303,7 +283,7 @@
   function setupOfflineCache() {
     if ("serviceWorker" in navigator && (window.location.protocol === "https:" || window.location.hostname === "localhost")) {
       var swCode = [
-        "var CACHE_NAME = 'html-runner-shell-v2';",
+        "var CACHE_NAME = 'html-runner-shell-v3';",
         "self.addEventListener('install', function(e) {",
         "  self.skipWaiting();",
         "  e.waitUntil(caches.open(CACHE_NAME).then(function(cache) {",
@@ -432,22 +412,6 @@
     runnerFrame.src = currentBlobUrl;
   }
 
-  function exitToMenu() {
-    runnerContainer.style.display = "none";
-    runnerFrame.src = "about:blank";
-
-    if (currentBlobUrl) {
-      try {
-        URL.revokeObjectURL(currentBlobUrl);
-      } catch (e) {}
-      currentBlobUrl = null;
-    }
-
-    document.body.style.overflow = "";
-    launcherEl.style.display = "block";
-    renderList();
-  }
-
   function saveAndRun(name, rawBuffer, sourceType) {
     if (!rawBuffer || rawBuffer.byteLength === 0) {
       setStatus("Error: Empty file.");
@@ -520,7 +484,7 @@
           var byteSize = item.size || (item.buffer ? item.buffer.byteLength : 0);
           var meta = document.createElement("div");
           meta.className = "saved-meta";
-          meta.textContent = item.source + " • " + formatBytes(byteSize) + " • " + item.updated;
+          meta.textContent = item.source + " - " + formatBytes(byteSize) + " - " + item.updated;
 
           info.appendChild(title);
           info.appendChild(meta);
@@ -613,12 +577,10 @@
   searchInput.oninput = renderList;
   searchInput.onkeyup = renderList;
 
-  backBtn.onclick = exitToMenu;
-
   function init() {
     setupOfflineCache();
     initDb(function() {
-      renderList(); // Always boots straight to the home screen on load/reload!
+      renderList(); // Always boots straight to the home screen
     });
   }
 
