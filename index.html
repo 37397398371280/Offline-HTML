@@ -1,7 +1,6 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Offline HTML Runner</title>
 <style>
@@ -26,11 +25,27 @@
     margin: 0 auto;
     padding: 20px 16px 60px;
   }
+  .header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    gap: 10px;
+  }
   h1 {
     font-size: 22px;
-    margin: 0 0 16px;
+    margin: 0;
     color: #ffffff;
     font-weight: 600;
+  }
+  .badge {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: #252525;
+    border: 1px solid #3a3a3a;
+    color: #4dabf7;
+    white-space: nowrap;
   }
   .card {
     background: #1e1e1e;
@@ -60,7 +75,7 @@
     border-radius: 8px;
     color: #ffffff;
     padding: 12px 14px;
-    font-size: 16px; /* Prevents iOS zoom & good for Switch cursor */
+    font-size: 16px;
     outline: none;
   }
   input[type="text"]:focus, input[type="url"]:focus {
@@ -185,7 +200,7 @@
     width: 100%;
     height: 100%;
     border: none;
-    background: #ffffff;
+    background: #000000;
     z-index: 9999;
   }
 </style>
@@ -194,7 +209,10 @@
 
   <!-- Launcher Interface -->
   <div id="launcher">
-    <h1>HTML Offline Runner (Large Storage)</h1>
+    <div class="header-row">
+      <h1>HTML Offline Runner</h1>
+      <span class="badge" id="offline-badge">Checking Offline...</span>
+    </div>
 
     <div class="card">
       <div class="card-title">Load New HTML</div>
@@ -205,7 +223,7 @@
 
       <label class="file-btn">
         <span>Upload HTML File</span>
-        <input type="file" id="file-input" accept=".html,.htm,text/html,text/plain">
+        <input type="file" id="file-input" accept=".html,.htm,text/html,*/*">
       </label>
 
       <div id="status"></div>
@@ -221,16 +239,17 @@
   </div>
 
   <!-- Fullscreen Output Frame -->
-  <iframe id="runner-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"></iframe>
+  <iframe id="runner-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"></iframe>
 
 <script>
 (function() {
-  var DB_NAME = "OfflineHtmlRunnerDB";
+  var DB_NAME = "OfflineHtmlRunnerRawDB_v2";
   var DB_VERSION = 1;
   var STORE_NAME = "files";
-  var STORAGE_ACTIVE_KEY = "offline_html_runner_active_id";
+  var STORAGE_ACTIVE_KEY = "offline_html_runner_active_id_v2";
 
   var db = null;
+  var currentBlobUrl = null;
   var launcherEl = document.getElementById("launcher");
   var runnerFrame = document.getElementById("runner-frame");
   var urlInput = document.getElementById("url-input");
@@ -239,26 +258,74 @@
   var searchInput = document.getElementById("search-input");
   var savedListEl = document.getElementById("saved-list");
   var statusEl = document.getElementById("status");
+  var offlineBadge = document.getElementById("offline-badge");
 
   function setStatus(msg) {
     statusEl.textContent = msg || "";
   }
 
   function formatBytes(bytes) {
+    if (!bytes && bytes !== 0) return "0 B";
     if (bytes < 1024) return bytes + " B";
     if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
     return (bytes / 1048576).toFixed(1) + " MB";
   }
 
-  // Initialize IndexedDB for large file support (>5MB)
+  // Register inline Service Worker so the runner itself works completely offline
+  function setupOfflineCache() {
+    if ("serviceWorker" in navigator && (window.location.protocol === "https:" || window.location.hostname === "localhost")) {
+      var swCode = [
+        "var CACHE_NAME = 'html-runner-shell-v1';",
+        "self.addEventListener('install', function(e) {",
+        "  self.skipWaiting();",
+        "  e.waitUntil(caches.open(CACHE_NAME).then(function(cache) {",
+        "    return cache.addAll([self.location.href.split('#')[0]]);",
+        "  }).catch(function(){}));",
+        "});",
+        "self.addEventListener('activate', function(e) {",
+        "  e.waitUntil(self.clients.claim());",
+        "});",
+        "self.addEventListener('fetch', function(e) {",
+        "  if (e.request.mode === 'navigate') {",
+        "    e.respondWith(fetch(e.request).then(function(res) {",
+        "      var copy = res.clone();",
+        "      caches.open(CACHE_NAME).then(function(c) { c.put(e.request, copy); });",
+        "      return res;",
+        "    }).catch(function() {",
+        "      return caches.match(e.request);",
+        "    }));",
+        "  }",
+        "});"
+      ].join("\n");
+
+      try {
+        var swBlob = new Blob([swCode], { type: "application/javascript" });
+        var swUrl = URL.createObjectURL(swBlob);
+        navigator.serviceWorker.register(swUrl).then(function() {
+          offlineBadge.textContent = navigator.onLine ? "Offline Ready" : "Offline Mode";
+        }).catch(function() {
+          offlineBadge.textContent = navigator.onLine ? "Online" : "Offline";
+        });
+      } catch (e) {
+        offlineBadge.textContent = navigator.onLine ? "Online" : "Offline";
+      }
+    } else {
+      offlineBadge.textContent = window.location.protocol === "file:" ? "Local Disk" : (navigator.onLine ? "Online" : "Offline");
+    }
+
+    window.addEventListener("online", function() { offlineBadge.textContent = "Offline Ready"; });
+    window.addEventListener("offline", function() { offlineBadge.textContent = "Offline Mode"; });
+  }
+
+  // Initialize IndexedDB for raw binary ArrayBuffer storage
   function initDb(callback) {
     if (db) {
       callback(db);
       return;
     }
     var request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onerror = function(e) {
-      setStatus("IndexedDB error: Unable to open database.");
+    request.onerror = function() {
+      setStatus("Storage error: Could not open local database.");
     };
     request.onupgradeneeded = function(e) {
       var database = e.target.result;
@@ -274,33 +341,46 @@
 
   function getAllFiles(callback) {
     initDb(function(database) {
-      var transaction = database.transaction(STORE_NAME, "readonly");
-      var store = transaction.objectStore(STORE_NAME);
-      var request = store.getAll();
-      request.onsuccess = function() {
-        // Sort descending by updated timestamp or ID
-        var files = request.result || [];
+      var tx = database.transaction(STORE_NAME, "readonly");
+      var store = tx.objectStore(STORE_NAME);
+      var req = store.getAll();
+      req.onsuccess = function() {
+        var files = req.result || [];
         files.sort(function(a, b) {
           return b.timestamp - a.timestamp;
         });
         callback(files);
       };
-      request.onerror = function() {
+      req.onerror = function() {
         callback([]);
+      };
+    });
+  }
+
+  function getFileById(id, callback) {
+    initDb(function(database) {
+      var tx = database.transaction(STORE_NAME, "readonly");
+      var store = tx.objectStore(STORE_NAME);
+      var req = store.get(id);
+      req.onsuccess = function() {
+        callback(req.result || null);
+      };
+      req.onerror = function() {
+        callback(null);
       };
     });
   }
 
   function saveFileToDb(entry, callback) {
     initDb(function(database) {
-      var transaction = database.transaction(STORE_NAME, "readwrite");
-      var store = transaction.objectStore(STORE_NAME);
-      var request = store.put(entry);
-      request.onsuccess = function() {
+      var tx = database.transaction(STORE_NAME, "readwrite");
+      var store = tx.objectStore(STORE_NAME);
+      var req = store.put(entry);
+      req.onsuccess = function() {
         if (callback) callback(true);
       };
-      request.onerror = function() {
-        setStatus("Failed to save file to database.");
+      req.onerror = function() {
+        setStatus("Failed to save file to device storage.");
         if (callback) callback(false);
       };
     });
@@ -308,31 +388,39 @@
 
   function deleteFileFromDb(id, callback) {
     initDb(function(database) {
-      var transaction = database.transaction(STORE_NAME, "readwrite");
-      var store = transaction.objectStore(STORE_NAME);
-      var request = store.delete(id);
-      request.onsuccess = function() {
+      var tx = database.transaction(STORE_NAME, "readwrite");
+      var store = tx.objectStore(STORE_NAME);
+      var req = store.delete(id);
+      req.onsuccess = function() {
         if (callback) callback(true);
       };
-      request.onerror = function() {
+      req.onerror = function() {
         if (callback) callback(false);
       };
     });
   }
 
-  function runHtml(id, htmlCode) {
+  // Mount raw bytes via Blob URL with NO charset=utf-8 header so binary/packed HTML unpacks cleanly
+  function runRawHtml(id, rawBuffer) {
     try {
       localStorage.setItem(STORAGE_ACTIVE_KEY, id);
     } catch (e) {}
 
+    if (currentBlobUrl) {
+      try {
+        URL.revokeObjectURL(currentBlobUrl);
+      } catch (e) {}
+      currentBlobUrl = null;
+    }
+
+    // Explicitly use 'text/html' WITHOUT ';charset=utf-8' to preserve raw byte offsets
+    var htmlBlob = new Blob([rawBuffer], { type: "text/html" });
+    currentBlobUrl = URL.createObjectURL(htmlBlob);
+
     launcherEl.style.display = "none";
     document.body.style.overflow = "hidden";
     runnerFrame.style.display = "block";
-
-    var doc = runnerFrame.contentDocument || runnerFrame.contentWindow.document;
-    doc.open();
-    doc.write(htmlCode);
-    doc.close();
+    runnerFrame.src = currentBlobUrl;
   }
 
   function exitToMenu() {
@@ -341,38 +429,43 @@
     } catch (e) {}
 
     runnerFrame.style.display = "none";
-    var doc = runnerFrame.contentDocument || runnerFrame.contentWindow.document;
-    doc.open();
-    doc.write("");
-    doc.close();
+    runnerFrame.src = "about:blank";
+
+    if (currentBlobUrl) {
+      try {
+        URL.revokeObjectURL(currentBlobUrl);
+      } catch (e) {}
+      currentBlobUrl = null;
+    }
 
     document.body.style.overflow = "";
     launcherEl.style.display = "block";
     renderList();
   }
 
-  function saveAndRun(name, htmlCode, sourceType) {
-    if (!htmlCode || !htmlCode.trim()) {
-      setStatus("Error: Empty HTML content.");
+  function saveAndRun(name, rawBuffer, sourceType) {
+    if (!rawBuffer || rawBuffer.byteLength === 0) {
+      setStatus("Error: Empty file.");
       return;
     }
 
     var cleanName = (name || "Untitled.html").trim();
     var id = "file_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
-    
+
     var entry = {
       id: id,
       name: cleanName,
       source: sourceType,
+      size: rawBuffer.byteLength,
       updated: new Date().toLocaleDateString(),
       timestamp: Date.now(),
-      code: htmlCode
+      buffer: rawBuffer
     };
 
     saveFileToDb(entry, function(success) {
       if (success) {
         setStatus("");
-        runHtml(id, htmlCode);
+        runRawHtml(id, rawBuffer);
       }
     });
   }
@@ -390,7 +483,7 @@
 
   function renderList() {
     var query = (searchInput.value || "").toLowerCase().trim();
-    
+
     getAllFiles(function(files) {
       savedListEl.innerHTML = "";
 
@@ -417,16 +510,17 @@
           var info = document.createElement("div");
           info.className = "saved-info";
           info.onclick = function() {
-            runHtml(item.id, item.code);
+            runRawHtml(item.id, item.buffer);
           };
 
           var title = document.createElement("div");
           title.className = "saved-name";
           title.textContent = item.name;
 
+          var byteSize = item.size || (item.buffer ? item.buffer.byteLength : 0);
           var meta = document.createElement("div");
           meta.className = "saved-meta";
-          meta.textContent = item.source + " • " + formatBytes(item.code.length) + " • " + item.updated;
+          meta.textContent = item.source + " • " + formatBytes(byteSize) + " • " + item.updated;
 
           info.appendChild(title);
           info.appendChild(meta);
@@ -439,7 +533,7 @@
           runBtn.className = "run-btn";
           runBtn.textContent = "Run";
           runBtn.onclick = function() {
-            runHtml(item.id, item.code);
+            runRawHtml(item.id, item.buffer);
           };
 
           var delBtn = document.createElement("button");
@@ -461,6 +555,7 @@
     });
   }
 
+  // Fetch URL as raw ArrayBuffer so binary/packed files are never decoded as UTF-8
   loadUrlBtn.onclick = function() {
     var url = (urlInput.value || "").trim();
     if (!url) {
@@ -471,21 +566,22 @@
       url = "https://" + url;
     }
 
-    setStatus("Fetching HTML...");
+    setStatus("Downloading raw HTML bytes...");
     loadUrlBtn.disabled = true;
 
     var xhr = new XMLHttpRequest();
     xhr.open("GET", url, true);
+    xhr.responseType = "arraybuffer";
     xhr.onreadystatechange = function() {
       if (xhr.readyState === 4) {
         loadUrlBtn.disabled = false;
-        if (xhr.status >= 200 && xhr.status < 300) {
+        if (xhr.status >= 200 && xhr.status < 300 && xhr.response) {
           setStatus("");
-          var parts = url.split("/");
+          var parts = url.split("?")[0].split("/");
           var fileName = parts[parts.length - 1] || url.replace(/^https?:\/\//, "");
-          saveAndRun(fileName, xhr.responseText, "URL");
+          saveAndRun(fileName, xhr.response, "URL");
         } else {
-          setStatus("Failed to load URL (Status: " + xhr.status + "). Remote server may block CORS.");
+          setStatus("Failed to load URL (Status: " + xhr.status + "). Server may block CORS.");
         }
       }
     };
@@ -496,11 +592,12 @@
     xhr.send();
   };
 
+  // Read uploaded file as raw ArrayBuffer (no UTF-8 string conversion)
   fileInput.onchange = function(e) {
     var file = e.target.files && e.target.files[0];
     if (!file) return;
 
-    setStatus("Reading file...");
+    setStatus("Reading raw file bytes...");
     var reader = new FileReader();
     reader.onload = function(evt) {
       setStatus("");
@@ -510,13 +607,15 @@
     reader.onerror = function() {
       setStatus("Failed to read uploaded file.");
     };
-    reader.readAsText(file);
+    reader.readAsArrayBuffer(file);
   };
 
   searchInput.oninput = renderList;
   searchInput.onkeyup = renderList;
 
   function init() {
+    setupOfflineCache();
+
     if (window.location.hash === "#menu") {
       try {
         localStorage.removeItem(STORAGE_ACTIVE_KEY);
@@ -532,14 +631,12 @@
       try {
         var activeId = localStorage.getItem(STORAGE_ACTIVE_KEY);
         if (activeId) {
-          getAllFiles(function(files) {
-            for (var i = 0; i < files.length; i++) {
-              if (files[i].id === activeId) {
-                runHtml(files[i].id, files[i].code);
-                return;
-              }
+          getFileById(activeId, function(item) {
+            if (item && item.buffer) {
+              runRawHtml(item.id, item.buffer);
+            } else {
+              renderList();
             }
-            renderList();
           });
           return;
         }
