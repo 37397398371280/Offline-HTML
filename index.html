@@ -194,7 +194,7 @@
 
   <!-- Launcher Interface -->
   <div id="launcher">
-    <h1>HTML Offline Runner (Permanent Storage)</h1>
+    <h1>HTML Offline Runner (Large Storage)</h1>
 
     <div class="card">
       <div class="card-title">Load New HTML</div>
@@ -225,9 +225,12 @@
 
 <script>
 (function() {
-  var STORAGE_FILES_KEY = "offline_html_runner_permanent_files_v1";
-  var STORAGE_ACTIVE_KEY = "offline_html_runner_permanent_active_v1";
+  var DB_NAME = "OfflineHtmlRunnerDB";
+  var DB_VERSION = 1;
+  var STORE_NAME = "files";
+  var STORAGE_ACTIVE_KEY = "offline_html_runner_active_id";
 
+  var db = null;
   var launcherEl = document.getElementById("launcher");
   var runnerFrame = document.getElementById("runner-frame");
   var urlInput = document.getElementById("url-input");
@@ -241,29 +244,80 @@
     statusEl.textContent = msg || "";
   }
 
-  function getSavedFiles() {
-    try {
-      var raw = localStorage.getItem(STORAGE_FILES_KEY);
-      return raw ? JSON.parse(raw) : [];
-    } catch (e) {
-      return [];
-    }
-  }
-
-  function setSavedFiles(files) {
-    try {
-      localStorage.setItem(STORAGE_FILES_KEY, JSON.stringify(files));
-      return true;
-    } catch (e) {
-      setStatus("Storage full! Delete some saved files first.");
-      return false;
-    }
-  }
-
   function formatBytes(bytes) {
     if (bytes < 1024) return bytes + " B";
     if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
     return (bytes / 1048576).toFixed(1) + " MB";
+  }
+
+  // Initialize IndexedDB for large file support (>5MB)
+  function initDb(callback) {
+    if (db) {
+      callback(db);
+      return;
+    }
+    var request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onerror = function(e) {
+      setStatus("IndexedDB error: Unable to open database.");
+    };
+    request.onupgradeneeded = function(e) {
+      var database = e.target.result;
+      if (!database.objectStoreNames.contains(STORE_NAME)) {
+        database.createObjectStore(STORE_NAME, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = function(e) {
+      db = e.target.result;
+      callback(db);
+    };
+  }
+
+  function getAllFiles(callback) {
+    initDb(function(database) {
+      var transaction = database.transaction(STORE_NAME, "readonly");
+      var store = transaction.objectStore(STORE_NAME);
+      var request = store.getAll();
+      request.onsuccess = function() {
+        // Sort descending by updated timestamp or ID
+        var files = request.result || [];
+        files.sort(function(a, b) {
+          return b.timestamp - a.timestamp;
+        });
+        callback(files);
+      };
+      request.onerror = function() {
+        callback([]);
+      };
+    });
+  }
+
+  function saveFileToDb(entry, callback) {
+    initDb(function(database) {
+      var transaction = database.transaction(STORE_NAME, "readwrite");
+      var store = transaction.objectStore(STORE_NAME);
+      var request = store.put(entry);
+      request.onsuccess = function() {
+        if (callback) callback(true);
+      };
+      request.onerror = function() {
+        setStatus("Failed to save file to database.");
+        if (callback) callback(false);
+      };
+    });
+  }
+
+  function deleteFileFromDb(id, callback) {
+    initDb(function(database) {
+      var transaction = database.transaction(STORE_NAME, "readwrite");
+      var store = transaction.objectStore(STORE_NAME);
+      var request = store.delete(id);
+      request.onsuccess = function() {
+        if (callback) callback(true);
+      };
+      request.onerror = function() {
+        if (callback) callback(false);
+      };
+    });
   }
 
   function runHtml(id, htmlCode) {
@@ -303,125 +357,108 @@
       return;
     }
 
-    var files = getSavedFiles();
     var cleanName = (name || "Untitled.html").trim();
-    var existingIndex = -1;
-
-    for (var i = 0; i < files.length; i++) {
-      if (files[i].name.toLowerCase() === cleanName.toLowerCase()) {
-        existingIndex = i;
-        break;
-      }
-    }
-
-    var id = existingIndex !== -1 ? files[existingIndex].id : "file_" + Date.now();
+    var id = "file_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
+    
     var entry = {
       id: id,
       name: cleanName,
       source: sourceType,
       updated: new Date().toLocaleDateString(),
+      timestamp: Date.now(),
       code: htmlCode
     };
 
-    if (existingIndex !== -1) {
-      files[existingIndex] = entry;
-    } else {
-      files.unshift(entry);
-    }
-
-    if (setSavedFiles(files)) {
-      runHtml(id, htmlCode);
-    }
+    saveFileToDb(entry, function(success) {
+      if (success) {
+        setStatus("");
+        runHtml(id, htmlCode);
+      }
+    });
   }
 
   function deleteFile(id) {
-    var files = getSavedFiles();
-    var updated = [];
-    for (var i = 0; i < files.length; i++) {
-      if (files[i].id !== id) {
-        updated.push(files[i]);
-      }
-    }
-    setSavedFiles(updated);
-
-    try {
-      if (localStorage.getItem(STORAGE_ACTIVE_KEY) === id) {
-        localStorage.removeItem(STORAGE_ACTIVE_KEY);
-      }
-    } catch (e) {}
-
-    renderList();
+    deleteFileFromDb(id, function() {
+      try {
+        if (localStorage.getItem(STORAGE_ACTIVE_KEY) === id) {
+          localStorage.removeItem(STORAGE_ACTIVE_KEY);
+        }
+      } catch (e) {}
+      renderList();
+    });
   }
 
   function renderList() {
     var query = (searchInput.value || "").toLowerCase().trim();
-    var files = getSavedFiles();
-    savedListEl.innerHTML = "";
+    
+    getAllFiles(function(files) {
+      savedListEl.innerHTML = "";
 
-    var filtered = [];
-    for (var i = 0; i < files.length; i++) {
-      if (!query || files[i].name.toLowerCase().indexOf(query) !== -1) {
-        filtered.push(files[i]);
+      var filtered = [];
+      for (var i = 0; i < files.length; i++) {
+        if (!query || files[i].name.toLowerCase().indexOf(query) !== -1) {
+          filtered.push(files[i]);
+        }
       }
-    }
 
-    if (filtered.length === 0) {
-      var empty = document.createElement("li");
-      empty.className = "empty-msg";
-      empty.textContent = files.length === 0 ? "No saved HTML files yet." : "No matching files found.";
-      savedListEl.appendChild(empty);
-      return;
-    }
+      if (filtered.length === 0) {
+        var empty = document.createElement("li");
+        empty.className = "empty-msg";
+        empty.textContent = files.length === 0 ? "No saved HTML files yet." : "No matching files found.";
+        savedListEl.appendChild(empty);
+        return;
+      }
 
-    for (var j = 0; j < filtered.length; j++) {
-      (function(item) {
-        var li = document.createElement("li");
-        li.className = "saved-item";
+      for (var j = 0; j < filtered.length; j++) {
+        (function(item) {
+          var li = document.createElement("li");
+          li.className = "saved-item";
 
-        var info = document.createElement("div");
-        info.className = "saved-info";
-        info.onclick = function() {
-          runHtml(item.id, item.code);
-        };
+          var info = document.createElement("div");
+          info.className = "saved-info";
+          info.onclick = function() {
+            runHtml(item.id, item.code);
+          };
 
-        var title = document.createElement("div");
-        title.className = "saved-name";
-        title.textContent = item.name;
+          var title = document.createElement("div");
+          title.className = "saved-name";
+          title.textContent = item.name;
 
-        var meta = document.createElement("div");
-        meta.className = "saved-meta";
-        meta.textContent = item.source + " • " + formatBytes(item.code.length) + " • " + item.updated;
+          var meta = document.createElement("div");
+          meta.className = "saved-meta";
+          meta.textContent = item.source + " • " + formatBytes(item.code.length) + " • " + item.updated;
 
-        info.appendChild(title);
-        info.appendChild(meta);
+          info.appendChild(title);
+          info.appendChild(meta);
 
-        var actions = document.createElement("div");
-        actions.className = "saved-actions";
+          var actions = document.createElement("div");
+          actions.className = "saved-actions";
 
-        var runBtn = document.createElement("button");
-        runBtn.type = "button";
-        runBtn.className = "run-btn";
-        runBtn.textContent = "Run";
-        runBtn.onclick = function() {
-          runHtml(item.id, item.code);
-        };
+          var runBtn = document.createElement("button");
+          runBtn.type = "button";
+          runBtn.className = "run-btn";
+          runBtn.textContent = "Run";
+          runBtn.onclick = function() {
+            runHtml(item.id, item.code);
+          };
 
-        var delBtn = document.createElement("button");
-        delBtn.type = "button";
-        delBtn.className = "danger";
-        delBtn.textContent = "Delete";
-        delBtn.onclick = function() {
-          deleteFile(item.id);
-        };
+          var delBtn = document.createElement("button");
+          delBtn.type = "button";
+          delBtn.className = "danger";
+          delBtn.textContent = "Delete";
+          delBtn.onclick = function() {
+            deleteFile(item.id);
+          };
 
-        actions.appendChild(runBtn);
-        actions.appendChild(delBtn);
+          actions.appendChild(runBtn);
+          actions.appendChild(delBtn);
 
-        li.appendChild(info);
-        li.appendChild(actions);
-        savedListEl.appendChild(li);
-      })(filtered[j]);
-    }
+          li.appendChild(info);
+          li.appendChild(actions);
+          savedListEl.appendChild(li);
+        })(filtered[j]);
+      }
+    });
   }
 
   loadUrlBtn.onclick = function() {
@@ -491,20 +528,24 @@
       return;
     }
 
-    try {
-      var activeId = localStorage.getItem(STORAGE_ACTIVE_KEY);
-      if (activeId) {
-        var files = getSavedFiles();
-        for (var i = 0; i < files.length; i++) {
-          if (files[i].id === activeId) {
-            runHtml(files[i].id, files[i].code);
-            return;
-          }
+    initDb(function() {
+      try {
+        var activeId = localStorage.getItem(STORAGE_ACTIVE_KEY);
+        if (activeId) {
+          getAllFiles(function(files) {
+            for (var i = 0; i < files.length; i++) {
+              if (files[i].id === activeId) {
+                runHtml(files[i].id, files[i].code);
+                return;
+              }
+            }
+            renderList();
+          });
+          return;
         }
-      }
-    } catch (e) {}
-
-    renderList();
+      } catch (e) {}
+      renderList();
+    });
   }
 
   window.onhashchange = function() {
