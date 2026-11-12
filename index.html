@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Offline HTML Runner</title>
+<style>
+  * {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background-color: #121212;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    overflow-x: hidden;
+  }
+
+  /* Launcher UI */
+  #launcher {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 20px 16px 60px;
+  }
+  h1 {
+    font-size: 22px;
+    margin: 0 0 16px;
+    color: #ffffff;
+    font-weight: 600;
+  }
+  .card {
+    background: #1e1e1e;
+    border: 1px solid #333;
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #aaaaaa;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 0 0 12px;
+  }
+  .input-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  input[type="text"], input[type="url"] {
+    flex: 1;
+    min-width: 0;
+    background: #2a2a2a;
+    border: 1px solid #444;
+    border-radius: 8px;
+    color: #ffffff;
+    padding: 12px 14px;
+    font-size: 16px; /* Prevents iOS zoom & good for Switch cursor */
+    outline: none;
+  }
+  input[type="text"]:focus, input[type="url"]:focus {
+    border-color: #4dabf7;
+  }
+  button, .file-btn {
+    background: #2b8a3e;
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    min-height: 46px;
+    user-select: none;
+  }
+  button:active, .file-btn:active {
+    opacity: 0.8;
+  }
+  button.primary {
+    background: #1971c2;
+  }
+  button.danger {
+    background: #c92a2a;
+    padding: 10px 14px;
+    font-size: 14px;
+    min-height: 40px;
+  }
+  button.run-btn {
+    background: #2b8a3e;
+    padding: 10px 16px;
+    font-size: 14px;
+    min-height: 40px;
+  }
+  .file-btn {
+    width: 100%;
+    background: #364fc7;
+    position: relative;
+    overflow: hidden;
+  }
+  .file-btn input[type="file"] {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+  }
+  #status {
+    font-size: 14px;
+    color: #ffa94d;
+    margin-top: 8px;
+    min-height: 20px;
+    word-break: break-word;
+  }
+
+  /* Saved List & Search */
+  .search-wrap {
+    margin-bottom: 12px;
+  }
+  .search-wrap input {
+    width: 100%;
+  }
+  #saved-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .saved-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: #252525;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+  }
+  .saved-info {
+    flex: 1;
+    min-width: 0;
+    cursor: pointer;
+  }
+  .saved-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .saved-meta {
+    font-size: 12px;
+    color: #888;
+    margin-top: 2px;
+  }
+  .saved-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .empty-msg {
+    color: #777;
+    font-size: 14px;
+    text-align: center;
+    padding: 20px 0;
+  }
+
+  /* Fullscreen Runner View (Hides Everything Else) */
+  #runner-frame {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: #ffffff;
+    z-index: 9999;
+  }
+</style>
+</head>
+<body>
+
+  <!-- Launcher Interface -->
+  <div id="launcher">
+    <h1>HTML Offline Runner (Permanent Storage)</h1>
+
+    <div class="card">
+      <div class="card-title">Load New HTML</div>
+      <div class="input-row">
+        <input type="url" id="url-input" placeholder="https://example.com/page.html" autocomplete="off">
+        <button type="button" class="primary" id="load-url-btn">Load URL</button>
+      </div>
+
+      <label class="file-btn">
+        <span>Upload HTML File</span>
+        <input type="file" id="file-input" accept=".html,.htm,text/html,text/plain">
+      </label>
+
+      <div id="status"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Saved HTML Files</div>
+      <div class="search-wrap">
+        <input type="text" id="search-input" placeholder="Search saved files..." autocomplete="off">
+      </div>
+      <ul id="saved-list"></ul>
+    </div>
+  </div>
+
+  <!-- Fullscreen Output Frame -->
+  <iframe id="runner-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"></iframe>
+
+<script>
+(function() {
+  var STORAGE_FILES_KEY = "offline_html_runner_permanent_files_v1";
+  var STORAGE_ACTIVE_KEY = "offline_html_runner_permanent_active_v1";
+
+  var launcherEl = document.getElementById("launcher");
+  var runnerFrame = document.getElementById("runner-frame");
+  var urlInput = document.getElementById("url-input");
+  var loadUrlBtn = document.getElementById("load-url-btn");
+  var fileInput = document.getElementById("file-input");
+  var searchInput = document.getElementById("search-input");
+  var savedListEl = document.getElementById("saved-list");
+  var statusEl = document.getElementById("status");
+
+  function setStatus(msg) {
+    statusEl.textContent = msg || "";
+  }
+
+  function getSavedFiles() {
+    try {
+      var raw = localStorage.getItem(STORAGE_FILES_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function setSavedFiles(files) {
+    try {
+      localStorage.setItem(STORAGE_FILES_KEY, JSON.stringify(files));
+      return true;
+    } catch (e) {
+      setStatus("Storage full! Delete some saved files first.");
+      return false;
+    }
+  }
+
+  function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / 1048576).toFixed(1) + " MB";
+  }
+
+  function runHtml(id, htmlCode) {
+    try {
+      localStorage.setItem(STORAGE_ACTIVE_KEY, id);
+    } catch (e) {}
+
+    launcherEl.style.display = "none";
+    document.body.style.overflow = "hidden";
+    runnerFrame.style.display = "block";
+
+    var doc = runnerFrame.contentDocument || runnerFrame.contentWindow.document;
+    doc.open();
+    doc.write(htmlCode);
+    doc.close();
+  }
+
+  function exitToMenu() {
+    try {
+      localStorage.removeItem(STORAGE_ACTIVE_KEY);
+    } catch (e) {}
+
+    runnerFrame.style.display = "none";
+    var doc = runnerFrame.contentDocument || runnerFrame.contentWindow.document;
+    doc.open();
+    doc.write("");
+    doc.close();
+
+    document.body.style.overflow = "";
+    launcherEl.style.display = "block";
+    renderList();
+  }
+
+  function saveAndRun(name, htmlCode, sourceType) {
+    if (!htmlCode || !htmlCode.trim()) {
+      setStatus("Error: Empty HTML content.");
+      return;
+    }
+
+    var files = getSavedFiles();
+    var cleanName = (name || "Untitled.html").trim();
+    var existingIndex = -1;
+
+    for (var i = 0; i < files.length; i++) {
+      if (files[i].name.toLowerCase() === cleanName.toLowerCase()) {
+        existingIndex = i;
+        break;
+      }
+    }
+
+    var id = existingIndex !== -1 ? files[existingIndex].id : "file_" + Date.now();
+    var entry = {
+      id: id,
+      name: cleanName,
+      source: sourceType,
+      updated: new Date().toLocaleDateString(),
+      code: htmlCode
+    };
+
+    if (existingIndex !== -1) {
+      files[existingIndex] = entry;
+    } else {
+      files.unshift(entry);
+    }
+
+    if (setSavedFiles(files)) {
+      runHtml(id, htmlCode);
+    }
+  }
+
+  function deleteFile(id) {
+    var files = getSavedFiles();
+    var updated = [];
+    for (var i = 0; i < files.length; i++) {
+      if (files[i].id !== id) {
+        updated.push(files[i]);
+      }
+    }
+    setSavedFiles(updated);
+
+    try {
+      if (localStorage.getItem(STORAGE_ACTIVE_KEY) === id) {
+        localStorage.removeItem(STORAGE_ACTIVE_KEY);
+      }
+    } catch (e) {}
+
+    renderList();
+  }
+
+  function renderList() {
+    var query = (searchInput.value || "").toLowerCase().trim();
+    var files = getSavedFiles();
+    savedListEl.innerHTML = "";
+
+    var filtered = [];
+    for (var i = 0; i < files.length; i++) {
+      if (!query || files[i].name.toLowerCase().indexOf(query) !== -1) {
+        filtered.push(files[i]);
+      }
+    }
+
+    if (filtered.length === 0) {
+      var empty = document.createElement("li");
+      empty.className = "empty-msg";
+      empty.textContent = files.length === 0 ? "No saved HTML files yet." : "No matching files found.";
+      savedListEl.appendChild(empty);
+      return;
+    }
+
+    for (var j = 0; j < filtered.length; j++) {
+      (function(item) {
+        var li = document.createElement("li");
+        li.className = "saved-item";
+
+        var info = document.createElement("div");
+        info.className = "saved-info";
+        info.onclick = function() {
+          runHtml(item.id, item.code);
+        };
+
+        var title = document.createElement("div");
+        title.className = "saved-name";
+        title.textContent = item.name;
+
+        var meta = document.createElement("div");
+        meta.className = "saved-meta";
+        meta.textContent = item.source + " • " + formatBytes(item.code.length) + " • " + item.updated;
+
+        info.appendChild(title);
+        info.appendChild(meta);
+
+        var actions = document.createElement("div");
+        actions.className = "saved-actions";
+
+        var runBtn = document.createElement("button");
+        runBtn.type = "button";
+        runBtn.className = "run-btn";
+        runBtn.textContent = "Run";
+        runBtn.onclick = function() {
+          runHtml(item.id, item.code);
+        };
+
+        var delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "danger";
+        delBtn.textContent = "Delete";
+        delBtn.onclick = function() {
+          deleteFile(item.id);
+        };
+
+        actions.appendChild(runBtn);
+        actions.appendChild(delBtn);
+
+        li.appendChild(info);
+        li.appendChild(actions);
+        savedListEl.appendChild(li);
+      })(filtered[j]);
+    }
+  }
+
+  loadUrlBtn.onclick = function() {
+    var url = (urlInput.value || "").trim();
+    if (!url) {
+      setStatus("Enter a valid URL first.");
+      return;
+    }
+    if (url.indexOf("http://") !== 0 && url.indexOf("https://") !== 0) {
+      url = "https://" + url;
+    }
+
+    setStatus("Fetching HTML...");
+    loadUrlBtn.disabled = true;
+
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", url, true);
+    xhr.onreadystatechange = function() {
+      if (xhr.readyState === 4) {
+        loadUrlBtn.disabled = false;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          setStatus("");
+          var parts = url.split("/");
+          var fileName = parts[parts.length - 1] || url.replace(/^https?:\/\//, "");
+          saveAndRun(fileName, xhr.responseText, "URL");
+        } else {
+          setStatus("Failed to load URL (Status: " + xhr.status + "). Remote server may block CORS.");
+        }
+      }
+    };
+    xhr.onerror = function() {
+      loadUrlBtn.disabled = false;
+      setStatus("Network or CORS error fetching URL.");
+    };
+    xhr.send();
+  };
+
+  fileInput.onchange = function(e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    setStatus("Reading file...");
+    var reader = new FileReader();
+    reader.onload = function(evt) {
+      setStatus("");
+      saveAndRun(file.name, evt.target.result, "File");
+      fileInput.value = "";
+    };
+    reader.onerror = function() {
+      setStatus("Failed to read uploaded file.");
+    };
+    reader.readAsText(file);
+  };
+
+  searchInput.oninput = renderList;
+  searchInput.onkeyup = renderList;
+
+  function init() {
+    if (window.location.hash === "#menu") {
+      try {
+        localStorage.removeItem(STORAGE_ACTIVE_KEY);
+      } catch (e) {}
+      if (history.replaceState) {
+        history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
+      renderList();
+      return;
+    }
+
+    try {
+      var activeId = localStorage.getItem(STORAGE_ACTIVE_KEY);
+      if (activeId) {
+        var files = getSavedFiles();
+        for (var i = 0; i < files.length; i++) {
+          if (files[i].id === activeId) {
+            runHtml(files[i].id, files[i].code);
+            return;
+          }
+        }
+      }
+    } catch (e) {}
+
+    renderList();
+  }
+
+  window.onhashchange = function() {
+    if (window.location.hash === "#menu") {
+      exitToMenu();
+      if (history.replaceState) {
+        history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
+    }
+  };
+
+  init();
+})();
+</script>
+</body>
+</html>
